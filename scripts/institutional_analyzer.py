@@ -3,13 +3,15 @@
 Institutional Ownership Analyzer - Agent 2
 Architecture: CODE fetches + analyzes -> AI just summarizes.
 """
-
+from __future__ import annotations
 import sys
 import math
 import time
 import concurrent.futures
 import warnings
 warnings.filterwarnings('ignore')
+
+from models import HolderRecord
 
 # Windows cp1255 fix
 if hasattr(sys.stdout, 'reconfigure'):
@@ -49,11 +51,11 @@ ACTIVIST_FUNDS = [
     'nelson peltz', 'dan loeb', 'bill ackman'
 ]
 
-def is_big3(name):     return any(b in name.lower() for b in BIG_3)
-def is_notable(name):  return any(f in name.lower() for f in NOTABLE_FUNDS)
-def is_activist(name): return any(a in name.lower() for a in ACTIVIST_FUNDS)
+def is_big3(name: str) -> bool:     return any(b in name.lower() for b in BIG_3)
+def is_notable(name: str) -> bool:  return any(f in name.lower() for f in NOTABLE_FUNDS)
+def is_activist(name: str) -> bool: return any(a in name.lower() for a in ACTIVIST_FUNDS)
 
-def safe_pct(val):
+def safe_pct(val) -> float:
     if val is None: return 0.0
     try:
         f = float(val)
@@ -84,7 +86,7 @@ print(f"{time.time() - _t0:.1f}s")
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Holders ───────────────────────────────────────────────────────────────────
-holders = []
+holders: list[HolderRecord] = []
 if inst is not None and not inst.empty:
     for _, row in inst.iterrows():
         name   = str(row.get('Holder', 'N/A')).strip()
@@ -99,15 +101,15 @@ if inst is not None and not inst.empty:
         elif change < 0:     direction = "REDUCING"
         else:                direction = "UNCHANGED"
 
-        _big3 = is_big3(name)
+        _big3     = is_big3(name)
         _activist = is_activist(name)
-        _notable = is_notable(name)
+        _notable  = is_notable(name)
         tag = "BIG 3" if _big3 else ("ACTIVIST" if _activist else ("NOTABLE" if _notable else ""))
-        holders.append({
-            'name': name, 'pct': pct, 'shares': shares,
-            'change': change, 'direction': direction, 'tag': tag,
-            'is_big3': _big3, 'is_notable': _notable, 'is_activist': _activist,
-        })
+        holders.append(HolderRecord(
+            name=name, pct=pct, shares=shares,
+            change=change, direction=direction, tag=tag,
+            is_big3=_big3, is_notable=_notable, is_activist=_activist,
+        ))
 
 # ── Ownership stats ───────────────────────────────────────────────────────────
 inst_pct = inst_float_pct = insider_pct = 0.0
@@ -131,14 +133,14 @@ if shares_short_prev > 0 and shares_short > 0:
 
 # ── Trend ─────────────────────────────────────────────────────────────────────
 total      = len(holders)
-increasing = sum(1 for h in holders if h['change'] > 0)
-decreasing = sum(1 for h in holders if h['change'] < 0)
-unchanged  = sum(1 for h in holders if h['change'] == 0)
+increasing = sum(1 for h in holders if h.change > 0)
+decreasing = sum(1 for h in holders if h.change < 0)
+unchanged  = sum(1 for h in holders if h.change == 0)
 
-big3_total   = sum(1 for h in holders if h['is_big3'])
-big3_adding  = sum(1 for h in holders if h['is_big3'] and h['change'] > 0)
-big3_reducing= sum(1 for h in holders if h['is_big3'] and h['change'] < 0)
-big3_new     = sum(1 for h in holders if h['is_big3'] and h['change'] > 0.9)
+big3_total    = sum(1 for h in holders if h.is_big3)
+big3_adding   = sum(1 for h in holders if h.is_big3 and h.change > 0)
+big3_reducing = sum(1 for h in holders if h.is_big3 and h.change < 0)
+big3_new      = sum(1 for h in holders if h.is_big3 and h.change > 0.9)
 
 ratio = increasing / total if total > 0 else 0
 if ratio >= 0.7:   trend = "STRONGLY INCREASING"
@@ -148,8 +150,8 @@ elif total > 0:    trend = "DECREASING"
 else:              trend = "NO DATA"
 
 # ── Concentration risk — top 3 holders ────────────────────────────────────────
-sorted_h  = sorted(holders, key=lambda x: x['pct'], reverse=True)
-top3_pct  = sum(h['pct'] for h in sorted_h[:3]) * 100 if len(sorted_h) >= 3 else 0
+sorted_h   = sorted(holders, key=lambda x: x.pct, reverse=True)
+top3_pct   = sum(h.pct for h in sorted_h[:3]) * 100 if len(sorted_h) >= 3 else 0
 conc_label = "HIGH" if top3_pct > 25 else ("MODERATE" if top3_pct > 15 else "LOW")
 
 # ── 13F filing date — how stale is this data? ────────────────────────────────
@@ -161,12 +163,12 @@ if inst is not None and not inst.empty and 'Date Reported' in inst.columns:
         pass
 
 # ── Weighted flow — dollar-weighted direction of smart money ──────────────────
-total_weight = sum(h['pct'] for h in holders) or 0.01
-weighted_flow = sum(h['change'] * h['pct'] for h in holders) / total_weight
-flow_label = "NET INFLOW" if weighted_flow > 0.05 else ("NET OUTFLOW" if weighted_flow < -0.05 else "BALANCED")
+total_weight  = sum(h.pct for h in holders) or 0.01
+weighted_flow = sum(h.change * h.pct for h in holders) / total_weight
+flow_label    = "NET INFLOW" if weighted_flow > 0.05 else ("NET OUTFLOW" if weighted_flow < -0.05 else "BALANCED")
 
 # ── Activist detection ────────────────────────────────────────────────────────
-activists = [h for h in holders if h['is_activist']]
+activists = [h for h in holders if h.is_activist]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -180,10 +182,10 @@ if VERBOSE:
 
     print(f"\n--- TOP {total} HOLDERS ---")
     for h in holders:
-        sign    = "+" if h['change'] > 0 else ""
-        icon    = "[+]" if h['change'] > 0 else ("[-]" if h['change'] < 0 else "[=]")
-        tag_str = f" [{h['tag']}]" if h['tag'] else ""
-        print(f"  {icon} {h['name']:42s} {h['pct']*100:5.2f}% | {h['shares']:>12,} | {sign}{h['change']*100:.1f}% {h['direction']}{tag_str}")
+        sign    = "+" if h.change > 0 else ""
+        icon    = "[+]" if h.change > 0 else ("[-]" if h.change < 0 else "[=]")
+        tag_str = f" [{h.tag}]" if h.tag else ""
+        print(f"  {icon} {h.name:42s} {h.pct*100:5.2f}% | {h.shares:>12,} | {sign}{h.change*100:.1f}% {h.direction}{tag_str}")
 
     print(f"\n--- OWNERSHIP STATS ---")
     print(f"  Insider % Held:          {insider_pct:.2f}%")
@@ -217,14 +219,14 @@ if total > 0:
 
 # 2. Smart money signals — weighted by fund reputation
 for h in holders:
-    if h['is_big3']:
-        if h['change'] > 0.9:     score += 6   # new position = high conviction
-        elif h['change'] > 0:     score += 4
-        elif h['change'] < 0:     score -= 6
-    elif h['is_notable']:
-        if h['change'] > 0.5:     score += 3
-        elif h['change'] > 0:     score += 1
-        elif h['change'] < -0.03: score -= 2
+    if h.is_big3:
+        if h.change > 0.9:     score += 6
+        elif h.change > 0:     score += 4
+        elif h.change < 0:     score -= 6
+    elif h.is_notable:
+        if h.change > 0.5:     score += 3
+        elif h.change > 0:     score += 1
+        elif h.change < -0.03: score -= 2
 
 # 3. Short interest level
 if short_pct > 30:    score -= 8
@@ -233,10 +235,10 @@ elif short_pct > 10:  score -= 3
 elif short_pct < 3:   score += 5
 elif short_pct < 5:   score += 3
 
-# 4. Short momentum — rising = bears accumulating pressure (NEW)
+# 4. Short momentum — rising = bears accumulating pressure
 if short_mom > 20:    score -= 5
 elif short_mom > 10:  score -= 3
-elif short_mom < -20: score += 5   # shorts covering = squeeze setup
+elif short_mom < -20: score += 5
 elif short_mom < -10: score += 3
 
 # 5. Institutional ownership level
@@ -246,18 +248,18 @@ elif inst_pct < 25:      score -= 3
 
 # 6. Magnitude bonus — very large position changes = conviction
 for h in holders:
-    if h['change'] > 2:     score += 2
-    elif h['change'] > 0.9: score += 1
-    if h['change'] < -0.5:  score -= 2
+    if h.change > 2:     score += 2
+    elif h.change > 0.9: score += 1
+    if h.change < -0.5:  score -= 2
 
-# 7. Activist presence — this is a catalyst, not a passive holder
+# 7. Activist presence
 for h in activists:
-    if h['change'] > 0.9:   score += 8   # new activist position = major catalyst
-    elif h['change'] > 0:   score += 5
-    elif h['change'] < 0:   score -= 4   # activist exiting = lost conviction
+    if h.change > 0.9:   score += 8
+    elif h.change > 0:   score += 5
+    elif h.change < 0:   score -= 4
 
-# 8. Concentration risk — fragility when top 3 hold too much
-if top3_pct > 30:   score -= 4   # one redemption = big move
+# 8. Concentration risk
+if top3_pct > 30:   score -= 4
 elif top3_pct > 25: score -= 2
 
 score      = max(0, min(100, round(score)))
@@ -279,30 +281,30 @@ filing_str = f" | 13F: {filing_date}" if filing_date else ""
 print(f"  OWNERSHIP:  Inst {inst_float_pct:.1f}% float | Insider {insider_pct:.1f}% | {inst_count:,} funds | Top3 {top3_pct:.0f}% ({conc_label}){filing_str}")
 
 # Big 3
-b3 = [h for h in holders if h['is_big3']]
+b3 = [h for h in holders if h.is_big3]
 if b3:
     b3_parts = []
     for h in b3:
-        icon  = "[+]" if h['change'] > 0 else "[-]"
-        label = "NEW" if h['direction'] == "NEW POSITION" else f"{h['change']*100:+.1f}%"
-        b3_parts.append(f"{icon} {h['name'].split()[0]} {label} ({h['pct']*100:.1f}%)")
+        icon  = "[+]" if h.change > 0 else "[-]"
+        label = "NEW" if h.direction == "NEW POSITION" else f"{h.change*100:+.1f}%"
+        b3_parts.append(f"{icon} {h.name.split()[0]} {label} ({h.pct*100:.1f}%)")
     print(f"  BIG 3:      {' | '.join(b3_parts)}")
 
 # Notable funds — only significant movers
-notable_sig = [h for h in holders if h['is_notable'] and not h['is_big3'] and abs(h['change']) > 0.03][:5]
+notable_sig = [h for h in holders if h.is_notable and not h.is_big3 and abs(h.change) > 0.03][:5]
 if notable_sig:
     n_parts = []
     for h in notable_sig:
-        label = "NEW" if h['direction'] == "NEW POSITION" else f"{h['change']*100:+.0f}%"
-        n_parts.append(f"{h['name'].split()[0]} {label}")
+        label = "NEW" if h.direction == "NEW POSITION" else f"{h.change*100:+.0f}%"
+        n_parts.append(f"{h.name.split()[0]} {label}")
     print(f"  NOTABLE:    {' | '.join(n_parts)}")
 
-# Activist (only shows if one is present — rare but huge signal)
+# Activist
 if activists:
     for h in activists:
-        icon  = "[!]" if h['change'] > 0 else "[X]"
-        label = "NEW POSITION — CATALYST" if h['direction'] == "NEW POSITION" else h['direction']
-        print(f"  ACTIVIST:   {icon} {h['name']} {label} ({h['pct']*100:.1f}%)")
+        icon  = "[!]" if h.change > 0 else "[X]"
+        label = "NEW POSITION — CATALYST" if h.direction == "NEW POSITION" else h.direction
+        print(f"  ACTIVIST:   {icon} {h.name} {label} ({h.pct*100:.1f}%)")
 
 # Short interest
 mom_str = ""

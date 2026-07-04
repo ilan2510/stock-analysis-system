@@ -4,6 +4,7 @@ Stock Analysis Orchestrator — runs all 4 agents in parallel, combines scores.
 Usage: python scripts/orchestrator.py NFLX
        python scripts/orchestrator.py SHOP --verbose
 """
+from __future__ import annotations
 
 import sys
 import os
@@ -14,6 +15,8 @@ import subprocess
 import concurrent.futures
 from pathlib import Path
 from datetime import datetime
+
+from models import AgentResult
 
 # Windows cp1255 fix
 if hasattr(sys.stdout, 'reconfigure'):
@@ -47,7 +50,7 @@ WEIGHT_PROFILES = {
 DEFAULT_WEIGHTS = {'Fundamentals': 0.45, 'Institutional': 0.20, 'Analyst': 0.20, 'Trend': 0.15}
 
 
-def load_history():
+def load_history() -> dict:
     if HISTORY_FILE.exists():
         try:
             with open(HISTORY_FILE, 'r') as f:
@@ -57,7 +60,7 @@ def load_history():
     return {}
 
 
-def save_history(history, ticker, score, signal):
+def save_history(history: dict, ticker: str, score: int, signal: str) -> None:
     entry = {'date': datetime.now().strftime('%Y-%m-%d'), 'score': score, 'signal': signal}
     if ticker not in history:
         history[ticker] = []
@@ -75,7 +78,7 @@ def save_history(history, ticker, score, signal):
         pass
 
 
-def run_agent(agent, ticker, verbose):
+def run_agent(agent: dict, ticker: str, verbose: bool) -> AgentResult:
     script_path = SCRIPTS_DIR / agent['script']
     cmd = [sys.executable, str(script_path), ticker]
     if verbose:
@@ -89,9 +92,13 @@ def run_agent(agent, ticker, verbose):
         output = result.stdout or ''
         stderr = result.stderr or ''
     except subprocess.TimeoutExpired:
-        return {**agent, 'output': '', 'score': None, 'signal': 'TIMEOUT', 'error': 'Timed out after 30s'}
+        return AgentResult(name=agent['name'], script=agent['script'],
+                           output='', score=None, signal='TIMEOUT',
+                           error='Timed out after 30s')
     except Exception as e:
-        return {**agent, 'output': '', 'score': None, 'signal': 'ERROR', 'error': str(e)}
+        return AgentResult(name=agent['name'], script=agent['script'],
+                           output='', score=None, signal='ERROR',
+                           error=str(e))
 
     score = None
     signal = 'UNKNOWN'
@@ -100,20 +107,24 @@ def run_agent(agent, ticker, verbose):
         score  = int(match.group(1))
         signal = match.group(2)
 
-    return {**agent, 'output': output, 'score': score, 'signal': signal,
-            'error': stderr if result.returncode != 0 else None}
+    return AgentResult(
+        name=agent['name'], script=agent['script'],
+        output=output, score=score, signal=signal,
+        error=stderr if result.returncode != 0 else None,
+    )
 
 
-def extract_field(output, pattern, default=''):
+def extract_field(output: str, pattern: str, default: str = '') -> str:
     m = re.search(pattern, output)
     return m.group(1).strip() if m else default
 
 
-def build_story(results, ticker, final_score, final_signal, weight_profile, bench_key):
-    fund_out  = next((r['output'] for r in results if r['name'] == 'Fundamentals'), '')
-    inst_out  = next((r['output'] for r in results if r['name'] == 'Institutional'), '')
-    anlst_out = next((r['output'] for r in results if r['name'] == 'Analyst'), '')
-    trend_out = next((r['output'] for r in results if r['name'] == 'Trend'), '')
+def build_story(results: list[AgentResult], ticker: str, final_score: int,
+                final_signal: str, weight_profile: dict, bench_key: str) -> list[str]:
+    fund_out  = next((r.output for r in results if r.name == 'Fundamentals'), '')
+    inst_out  = next((r.output for r in results if r.name == 'Institutional'), '')
+    anlst_out = next((r.output for r in results if r.name == 'Analyst'), '')
+    trend_out = next((r.output for r in results if r.name == 'Trend'), '')
 
     # ── Extract data points ───────────────────────────────────────
     quality_match = re.search(r'Quality\s+(\d+)/100', fund_out)
@@ -284,12 +295,12 @@ print(f"Running 4 agents on ${TICKER}...", flush=True)
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
     futures = {ex.submit(run_agent, agent, TICKER, VERBOSE): agent for agent in AGENTS}
-    results = []
+    results: list[AgentResult] = []
     for future in concurrent.futures.as_completed(futures):
         results.append(future.result())
 
 agent_order = {a['script']: i for i, a in enumerate(AGENTS)}
-results.sort(key=lambda r: agent_order.get(r['script'], 99))
+results.sort(key=lambda r: agent_order.get(r.script, 99))
 
 elapsed = time.time() - _t0
 print(f"All agents done in {elapsed:.1f}s\n")
@@ -300,15 +311,15 @@ print(f"All agents done in {elapsed:.1f}s\n")
 # ══════════════════════════════════════════════════════════════════
 if VERBOSE:
     for r in results:
-        if r['output']:
-            print(r['output'])
+        if r.output:
+            print(r.output)
             print()
 
 
 # ══════════════════════════════════════════════════════════════════
 #  ADAPTIVE WEIGHTS — detect company type from Agent 1 output
 # ══════════════════════════════════════════════════════════════════
-fund_output = next((r['output'] for r in results if r['name'] == 'Fundamentals'), '')
+fund_output = next((r.output for r in results if r.name == 'Fundamentals'), '')
 bench_match = re.search(r'Benchmark:\s*(\w+)', fund_output)
 bench_key   = bench_match.group(1).lower() if bench_match else 'market'
 weight_profile = WEIGHT_PROFILES.get(bench_key, DEFAULT_WEIGHTS)
@@ -317,12 +328,12 @@ weight_profile = WEIGHT_PROFILES.get(bench_key, DEFAULT_WEIGHTS)
 # ══════════════════════════════════════════════════════════════════
 #  COMBINE SCORES — weighted average with adaptive weights
 # ══════════════════════════════════════════════════════════════════
-scored = [r for r in results if r['score'] is not None]
-failed = [r for r in results if r['score'] is None]
+scored = [r for r in results if r.score is not None]
+failed = [r for r in results if r.score is None]
 
 if scored:
-    total_weight   = sum(weight_profile.get(r['name'], 0.20) for r in scored)
-    weighted_score = sum(r['score'] * weight_profile.get(r['name'], 0.20) for r in scored) / total_weight
+    total_weight   = sum(weight_profile.get(r.name, 0.20) for r in scored)
+    weighted_score = sum(r.score * weight_profile.get(r.name, 0.20) for r in scored) / total_weight
     final_score    = round(weighted_score)
 else:
     final_score = 0
@@ -334,7 +345,7 @@ else:                   final_signal = "BEARISH"
 
 # Confidence — agent agreement
 if scored:
-    signals        = [r['signal'] for r in scored]
+    signals        = [r.signal for r in scored]
     bullish_count  = sum(1 for s in signals if s in ('BULLISH', 'TAILWIND'))
     bearish_count  = sum(1 for s in signals if s in ('BEARISH', 'HEADWIND'))
 
@@ -352,7 +363,7 @@ else:
 # Conflict detection
 conflicts = []
 if scored:
-    score_list = [(r['name'], r['score'], r['signal']) for r in scored]
+    score_list = [(r.name, r.score, r.signal) for r in scored]
     max_s = max(s for _, s, _ in score_list)
     min_s = min(s for _, s, _ in score_list)
     if max_s - min_s > 30:
@@ -385,18 +396,18 @@ print()
 
 # Per-agent scores
 for r in results:
-    if r['score'] is not None:
-        w = int(weight_profile.get(r['name'], 0.20) * 100)
-        print(f"  {r['name']:14s}  {r['score']:3d}/100  {r['signal']:10s}  (weight {w}%)")
+    if r.score is not None:
+        w = int(weight_profile.get(r.name, 0.20) * 100)
+        print(f"  {r.name:14s}  {r.score:3d}/100  {r.signal:10s}  (weight {w}%)")
     else:
-        err = r.get('error', 'unknown error')
-        print(f"  {r['name']:14s}  FAILED — {err}")
+        err = r.error or 'unknown error'
+        print(f"  {r.name:14s}  FAILED — {err}")
 
 if conflicts:
     print(f"\n  CONFLICT:    {conflicts[0]}")
 
 if failed:
-    print(f"\n  WARNING:     {len(failed)} agent(s) failed: {', '.join(r['name'] for r in failed)}")
+    print(f"\n  WARNING:     {len(failed)} agent(s) failed: {', '.join(r.name for r in failed)}")
 
 # The Story
 story_lines = build_story(results, TICKER, final_score, final_signal, weight_profile, bench_key)

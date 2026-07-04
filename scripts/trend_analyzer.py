@@ -3,6 +3,7 @@
 Trend & Sector Analyzer - Agent 5
 Architecture: CODE fetches + analyzes -> AI adds narrative via WebSearch.
 """
+from __future__ import annotations
 
 import sys
 import math
@@ -10,6 +11,8 @@ import time
 import concurrent.futures
 import warnings
 warnings.filterwarnings('ignore')
+
+from models import SectorData
 
 # Windows cp1255 fix
 if hasattr(sys.stdout, 'reconfigure'):
@@ -46,7 +49,7 @@ OFFENSIVE = {'XLK', 'XLY', 'XLC', 'XLF'}
 DEFENSIVE = {'XLP', 'XLU', 'XLV', 'XLRE'}
 
 
-def safe_float(val, default=0.0):
+def safe_float(val, default: float = 0.0) -> float:
     if val is None: return default
     try:
         f = float(val)
@@ -55,7 +58,7 @@ def safe_float(val, default=0.0):
         return default
 
 
-def calc_return(hist, days):
+def calc_return(hist, days: int) -> float:
     if hist is None or hist.empty or len(hist) < 2:
         return 0.0
     try:
@@ -69,7 +72,7 @@ def calc_return(hist, days):
         return 0.0
 
 
-def get_ticker_hist(batch, ticker):
+def get_ticker_hist(batch, ticker: str):
     try:
         df = batch[ticker]
         if hasattr(df, 'empty') and not df.empty and 'Close' in df.columns:
@@ -145,17 +148,17 @@ elif spy_1m < -2 or vix_current > 25:   regime = "RISK-OFF"
 else:                                    regime = "NEUTRAL"
 
 # ── Sector performance ───────────────────────────────────────────
-sector_data = {}
+sector_data: dict[str, SectorData] = {}
 for etf, name in SECTOR_ETFS.items():
     hist = get_ticker_hist(batch_raw, etf)
-    sector_data[etf] = {
-        'name': name,
-        '1w': calc_return(hist, 5),
-        '1m': calc_return(hist, 21),
-        '3m': calc_return(hist, 63),
-    }
+    sector_data[etf] = SectorData(
+        name=name,
+        ret_1w=calc_return(hist, 5),
+        ret_1m=calc_return(hist, 21),
+        ret_3m=calc_return(hist, 63),
+    )
 
-ranked   = sorted(sector_data.items(), key=lambda x: x[1]['1m'], reverse=True)
+ranked   = sorted(sector_data.items(), key=lambda x: x[1].ret_1m, reverse=True)
 leaders  = ranked[:3]
 laggards = ranked[-3:]
 
@@ -170,18 +173,18 @@ stock_1w = calc_return(stock_hist, 5)
 stock_1m = calc_return(stock_hist, 21)
 stock_3m = calc_return(stock_hist, 63)
 
-sd = sector_data.get(stock_etf, {'1w': 0, '1m': 0, '3m': 0, 'name': 'Unknown'})
-sector_vs_spy    = sd['1m'] - spy_1m
-stock_vs_sector  = stock_1m - sd['1m']
+sd = sector_data.get(stock_etf, SectorData(name='Unknown'))
+sector_vs_spy   = sd.ret_1m - spy_1m
+stock_vs_sector = stock_1m - sd.ret_1m
 
 # ── Rotation ─────────────────────────────────────────────────────
 off_avg = def_avg = 0.0
 off_count = def_count = 0
 for etf, d in sector_data.items():
     if etf in OFFENSIVE:
-        off_avg += d['1m'];  off_count += 1
+        off_avg += d.ret_1m;  off_count += 1
     elif etf in DEFENSIVE:
-        def_avg += d['1m'];  def_count += 1
+        def_avg += d.ret_1m;  def_count += 1
 if off_count > 0: off_avg /= off_count
 if def_count > 0: def_avg /= def_count
 
@@ -194,10 +197,10 @@ else:                       rotation = "BALANCED"
 accelerating = []
 decelerating = []
 for etf, d in ranked:
-    weekly_pace = d['1w'] * 4
-    diff = weekly_pace - d['1m']
-    if diff > 2:    accelerating.append((etf, d['name'], diff))
-    elif diff < -2: decelerating.append((etf, d['name'], diff))
+    weekly_pace = d.ret_1w * 4
+    diff = weekly_pace - d.ret_1m
+    if diff > 2:    accelerating.append((etf, d.name, diff))
+    elif diff < -2: decelerating.append((etf, d.name, diff))
 
 stock_sector_accel = False
 stock_sector_decel = False
@@ -206,7 +209,7 @@ if stock_etf:
     stock_sector_decel = any(etf == stock_etf for etf, _, _ in decelerating)
 
 # ── NEW: Market breadth — how many sectors beating SPY? ──────────
-breadth_count = sum(1 for _, d in sector_data.items() if d['1m'] > spy_1m)
+breadth_count = sum(1 for _, d in sector_data.items() if d.ret_1m > spy_1m)
 if breadth_count >= 8:     breadth_label = "BROAD"
 elif breadth_count >= 5:   breadth_label = "HEALTHY"
 elif breadth_count >= 3:   breadth_label = "NARROW"
@@ -216,7 +219,7 @@ else:                      breadth_label = "VERY NARROW"
 if stock_etf and stock_etf in sector_data:
     s = sector_data[stock_etf]
     dirs = []
-    for tf in [s['1w'], s['1m'], s['3m']]:
+    for tf in [s.ret_1w, s.ret_1m, s.ret_3m]:
         dirs.append('UP' if tf > 1 else ('DN' if tf < -1 else 'FLAT'))
     tf_str = '/'.join(dirs)
 
@@ -242,16 +245,16 @@ else:
 
 # ── NEW: Alpha quality — beating a strong sector vs a weak one ───
 if stock_vs_sector > 5:
-    if sd['1m'] > 2:
+    if sd.ret_1m > 2:
         alpha_quality = "REAL ALPHA (beating STRONG sector)"
-    elif sd['1m'] < -2:
+    elif sd.ret_1m < -2:
         alpha_quality = "RELATIVE ALPHA (less bad than WEAK sector)"
     else:
         alpha_quality = "ALPHA (beating flat sector)"
 elif stock_vs_sector < -5:
-    if sd['1m'] > 2:
+    if sd.ret_1m > 2:
         alpha_quality = "LAGGING (can't keep up with STRONG sector)"
-    elif sd['1m'] < -2:
+    elif sd.ret_1m < -2:
         alpha_quality = "DOUBLE DRAG (weak in WEAK sector)"
     else:
         alpha_quality = "UNDERPERFORMING (behind flat sector)"
@@ -279,12 +282,12 @@ if VERBOSE:
     print(f"  {'-'*4} {'-'*20} {'-'*5} {'-'*8} {'-'*8} {'-'*8}")
     for i, (etf, d) in enumerate(ranked, 1):
         marker = " <-- " if etf == stock_etf else ""
-        print(f"  {i:4d} {d['name']:20s} {etf:5s} {d['1w']:+7.1f}% {d['1m']:+7.1f}% {d['3m']:+7.1f}%{marker}")
+        print(f"  {i:4d} {d.name:20s} {etf:5s} {d.ret_1w:+7.1f}% {d.ret_1m:+7.1f}% {d.ret_3m:+7.1f}%{marker}")
     print(f"  {'---':4s} {'--- S&P 500 ---':20s} {'SPY':5s} {spy_1w:+7.1f}% {spy_1m:+7.1f}% {spy_3m:+7.1f}%")
 
     print(f"\n--- STOCK SECTOR CONTEXT ---")
     print(f"  Sector Rank:     #{stock_sector_rank}/11")
-    print(f"  Sector 1M:       {sd['1m']:+.1f}% (vs SPY: {sector_vs_spy:+.1f}%)")
+    print(f"  Sector 1M:       {sd.ret_1m:+.1f}% (vs SPY: {sector_vs_spy:+.1f}%)")
     print(f"  Stock 1M:        {stock_1m:+.1f}% (vs sector: {stock_vs_sector:+.1f}%)")
     print(f"  Alpha Quality:   {alpha_quality}")
     print(f"  TF Alignment:    1W/1M/3M: {tf_str} ({alignment_label})")
@@ -381,8 +384,8 @@ print(f"{sep}")
 print(f"  MARKET:     SPY 1W {spy_1w:+.1f}% | 1M {spy_1m:+.1f}% | 3M {spy_3m:+.1f}% | VIX {vix_current:.1f} ({vix_label}, {vix_dir}) | {regime}")
 
 # Line 2: Sector leaders/laggards + breadth
-leaders_str  = ', '.join(f"{d['name'].split()[0]} {d['1m']:+.0f}%" for _, d in leaders)
-laggards_str = ', '.join(f"{d['name'].split()[0]} {d['1m']:+.0f}%" for _, d in laggards)
+leaders_str  = ', '.join(f"{d.name.split()[0]} {d.ret_1m:+.0f}%" for _, d in leaders)
+laggards_str = ', '.join(f"{d.name.split()[0]} {d.ret_1m:+.0f}%" for _, d in laggards)
 print(f"  SECTORS:    Lead: {leaders_str} | Lag: {laggards_str} | Breadth: {breadth_count}/11 ({breadth_label})")
 
 # Line 3: Rotation
@@ -390,7 +393,7 @@ print(f"  ROTATION:   Off {off_avg:+.1f}% vs Def {def_avg:+.1f}% | Spread {rotat
 
 # Line 4: Stock's sector position + timeframe alignment
 mom_str = "ACCEL" if stock_sector_accel else ("DECEL" if stock_sector_decel else "STEADY")
-print(f"  SECTOR:     {stock_sector} #{stock_sector_rank}/11 | 1M {sd['1m']:+.1f}% (vs SPY {sector_vs_spy:+.1f}%) | Mom: {mom_str} | TF: {tf_str} ({alignment})")
+print(f"  SECTOR:     {stock_sector} #{stock_sector_rank}/11 | 1M {sd.ret_1m:+.1f}% (vs SPY {sector_vs_spy:+.1f}%) | Mom: {mom_str} | TF: {tf_str} ({alignment})")
 
 # Line 5: Stock alpha
 print(f"  STOCK:      ${TICKER} 1M {stock_1m:+.1f}% (vs sector {stock_vs_sector:+.1f}%) | {alpha_quality}")

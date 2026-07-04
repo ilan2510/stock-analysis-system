@@ -3,6 +3,7 @@
 Analyst Ratings Analyzer - Agent 3
 Architecture: CODE fetches + analyzes -> AI just summarizes.
 """
+from __future__ import annotations
 
 import sys
 import math
@@ -11,6 +12,8 @@ import concurrent.futures
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
+
+from models import AnalystAction
 
 # Windows cp1255 fix
 if hasattr(sys.stdout, 'reconfigure'):
@@ -30,9 +33,9 @@ TIER_1 = [
     'jefferies', 'wells fargo', 'rbc capital',
 ]
 
-def is_tier1(firm): return any(t in firm.lower() for t in TIER_1)
+def is_tier1(firm: str) -> bool:    return any(t in firm.lower() for t in TIER_1)
 
-def safe_float(val, default=0.0):
+def safe_float(val, default: float = 0.0) -> float:
     if val is None: return default
     try:
         f = float(val)
@@ -111,7 +114,7 @@ if targets:
 cutoff = datetime.now() - timedelta(days=90)
 
 upgrades_count = downgrades_count = pt_raises = pt_lowers = pt_maintains = initiations = 0
-recent_actions = []
+recent_actions: list[AnalystAction] = []
 
 if upgrades is not None and not upgrades.empty:
     for date_idx, row in upgrades.iterrows():
@@ -154,14 +157,19 @@ if upgrades is not None and not upgrades.empty:
             else:
                 pt_str = f" | PT: ${current_pt:.0f}"
 
-        recent_actions.append({
-            'date': action_date.strftime('%Y-%m-%d'), 'firm': firm,
-            'grade_str': grade_str, 'pt_str': pt_str,
-            'action': action, 'pt_action': pt_action,
-            'current_pt': current_pt, 'prior_pt': prior_pt,
-            'to_grade': to_grade, 'from_grade': from_grade,
-            'is_tier1': is_tier1(firm),
-        })
+        recent_actions.append(AnalystAction(
+            date=action_date.strftime('%Y-%m-%d'),
+            firm=firm,
+            grade_str=grade_str,
+            pt_str=pt_str,
+            action=action,
+            pt_action=pt_action,
+            current_pt=current_pt,
+            prior_pt=prior_pt,
+            to_grade=to_grade,
+            from_grade=from_grade,
+            is_tier1=is_tier1(firm),
+        ))
 
 # ── PT trend ──────────────────────────────────────────────────────
 pt_direction = "STABLE"
@@ -181,8 +189,8 @@ if upgrades_count + downgrades_count > 0:
 # ── Weighted PT change magnitude ──────────────────────────────────
 pt_changes_pct = []
 for a in recent_actions:
-    if a['prior_pt'] > 0 and a['current_pt'] > 0 and a['current_pt'] != a['prior_pt']:
-        pt_changes_pct.append((a['current_pt'] - a['prior_pt']) / a['prior_pt'] * 100)
+    if a.prior_pt > 0 and a.current_pt > 0 and a.current_pt != a.prior_pt:
+        pt_changes_pct.append((a.current_pt - a.prior_pt) / a.prior_pt * 100)
 avg_pt_change = sum(pt_changes_pct) / len(pt_changes_pct) if pt_changes_pct else 0
 
 # ── Consensus vs PT divergence ────────────────────────────────────
@@ -195,10 +203,10 @@ elif sell_ratio >= 0.4 and pt_direction == "RISING":
     divergence = "SELL-heavy consensus but PTs RISING — potential reversal brewing"
 
 # ── Tier 1 highlights ─────────────────────────────────────────────
-tier1_upgrades = [a for a in recent_actions if a['is_tier1'] and a['action'] in ('up', 'down')]
+tier1_upgrades = [a for a in recent_actions if a.is_tier1 and a.action in ('up', 'down')]
 tier1_pt_moves = sorted(
-    [a for a in recent_actions if a['is_tier1'] and a['prior_pt'] > 0 and a['current_pt'] > 0 and a['current_pt'] != a['prior_pt']],
-    key=lambda a: abs(a['current_pt'] - a['prior_pt']) / a['prior_pt'],
+    [a for a in recent_actions if a.is_tier1 and a.prior_pt > 0 and a.current_pt > 0 and a.current_pt != a.prior_pt],
+    key=lambda a: abs(a.current_pt - a.prior_pt) / a.prior_pt,
     reverse=True
 )
 tier1_show = tier1_upgrades[:2] + [a for a in tier1_pt_moves if a not in tier1_upgrades][:3]
@@ -256,8 +264,8 @@ if VERBOSE:
 
     print(f"\n--- RECENT ACTIONS (90 days) ---")
     for a in recent_actions[:12]:
-        t1 = " [T1]" if a['is_tier1'] else ""
-        print(f"  {a['date']} | {a['firm']:20s} | {a['grade_str']}{a['pt_str']}{t1}")
+        t1 = " [T1]" if a.is_tier1 else ""
+        print(f"  {a.date} | {a.firm:20s} | {a.grade_str}{a.pt_str}{t1}")
     print(f"\n  Upgrades: {upgrades_count} | Downgrades: {downgrades_count} | Initiations: {initiations}")
     print(f"  PT Raises: {pt_raises} | PT Lowers: {pt_lowers} | PT Maintains: {pt_maintains}")
 
@@ -320,9 +328,9 @@ elif avg_pt_change < -5:  score -= 3
 
 # 8. Tier 1 firm actions (+3 / -3 each)
 for a in recent_actions:
-    if a['is_tier1']:
-        if a['action'] == 'up':   score += 3
-        elif a['action'] == 'down': score -= 3
+    if a.is_tier1:
+        if a.action == 'up':   score += 3
+        elif a.action == 'down': score -= 3
 
 # 9. Divergence penalty (-6 / +4)
 if divergence and "FALLING" in divergence:
@@ -376,14 +384,14 @@ print(f"  ACTIONS:    {upgrades_count} upgrades | {downgrades_count} downgrades 
 if tier1_show:
     t1_parts = []
     for a in tier1_show[:4]:
-        name = a['firm'].split()[0]
-        if a['action'] in ('up', 'down'):
-            t1_parts.append(f"{name}: {a['from_grade']}->{a['to_grade']}{a['pt_str']}")
-        elif a['current_pt'] > 0 and a['prior_pt'] > 0:
-            chg = (a['current_pt'] - a['prior_pt']) / a['prior_pt'] * 100
-            t1_parts.append(f"{name}: PT ${a['current_pt']:.0f} ({chg:+.0f}%)")
-        elif a['current_pt'] > 0:
-            t1_parts.append(f"{name}: {a['to_grade']} PT ${a['current_pt']:.0f}")
+        name = a.firm.split()[0]
+        if a.action in ('up', 'down'):
+            t1_parts.append(f"{name}: {a.from_grade}->{a.to_grade}{a.pt_str}")
+        elif a.current_pt > 0 and a.prior_pt > 0:
+            chg = (a.current_pt - a.prior_pt) / a.prior_pt * 100
+            t1_parts.append(f"{name}: PT ${a.current_pt:.0f} ({chg:+.0f}%)")
+        elif a.current_pt > 0:
+            t1_parts.append(f"{name}: {a.to_grade} PT ${a.current_pt:.0f}")
     if t1_parts:
         print(f"  TIER 1:     {' | '.join(t1_parts)}")
 
