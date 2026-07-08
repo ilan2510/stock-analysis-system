@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Stock Analysis Orchestrator — runs all 4 agents in parallel, combines scores.
-Usage: python scripts/orchestrator.py NFLX
-       python scripts/orchestrator.py SHOP --verbose
+Usage: python src/orchestrator.py NFLX
+       python src/orchestrator.py SHOP --verbose
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import concurrent.futures
 from pathlib import Path
 from datetime import datetime
 
+sys.path.insert(0, str(Path(__file__).parent))
 from models import AgentResult
 
 # Windows cp1255 fix
@@ -31,10 +32,10 @@ HISTORY_FILE = SCRIPTS_DIR.parent / 'memory' / 'score_history.json'
 
 # ── Agent definitions (base weights — overridden by adaptive profile) ─────────
 AGENTS = [
-    {'name': 'Fundamentals', 'script': 'finnhub_stock_analyzer.py'},
-    {'name': 'Institutional', 'script': 'institutional_analyzer.py'},
-    {'name': 'Analyst',       'script': 'analyst_analyzer.py'},
-    {'name': 'Trend',         'script': 'trend_analyzer.py'},
+    {'name': 'Fundamentals', 'script': 'analyzers/fundamental.py'},
+    {'name': 'Institutional', 'script': 'analyzers/institutional.py'},
+    {'name': 'Analyst',       'script': 'analyzers/analyst.py'},
+    {'name': 'Trend',         'script': 'analyzers/trend.py'},
 ]
 
 # ── Adaptive weight profiles per sector/company type ─────────────────────────

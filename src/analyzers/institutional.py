@@ -8,9 +8,10 @@ import sys
 import math
 import time
 import concurrent.futures
+from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models import HolderRecord
 
 # Windows cp1255 fix
@@ -246,6 +247,14 @@ if 40 <= inst_pct <= 70: score += 3
 elif inst_pct > 70:      score += 1
 elif inst_pct < 25:      score -= 3
 
+# 5b. Insider ownership — skin in the game (Buffett signal)
+mcap = info.get('marketCap', 0) or 0
+is_small_mid = mcap < 20_000_000_000  # < $20B
+if insider_pct > 10:      score += 6  # founder/owner-operator
+elif insider_pct > 5:     score += 4  # strong alignment
+elif insider_pct > 1:     score += 2  # adequate
+elif is_small_mid and insider_pct < 0.5: score -= 3  # no skin in the game
+
 # 6. Magnitude bonus — very large position changes = conviction
 for h in holders:
     if h.change > 2:     score += 2
@@ -261,6 +270,12 @@ for h in activists:
 # 8. Concentration risk
 if top3_pct > 30:   score -= 4
 elif top3_pct > 25: score -= 2
+
+# 9. Short squeeze potential — high SI + hard to cover + institutions accumulating
+squeeze_flag = False
+if short_pct > 15 and short_ratio > 5 and ratio >= 0.5:
+    squeeze_flag = True
+    score += 6
 
 score      = max(0, min(100, round(score)))
 signal     = "BULLISH" if score >= 70 else ("NEUTRAL" if score >= 45 else "BEARISH")
@@ -306,12 +321,19 @@ if activists:
         label = "NEW POSITION — CATALYST" if h.direction == "NEW POSITION" else h.direction
         print(f"  ACTIVIST:   {icon} {h.name} {label} ({h.pct*100:.1f}%)")
 
+# Insider ownership
+insider_lbl = ("owner-operator" if insider_pct > 10 else
+               "strong" if insider_pct > 5 else
+               "adequate" if insider_pct > 1 else "low")
+print(f"  INSIDERS:   {insider_pct:.1f}% held ({insider_lbl})")
+
 # Short interest
 mom_str = ""
 if short_mom:
     mom_label = "RISING" if short_mom > 10 else ("FALLING" if short_mom < -10 else "stable")
     mom_str   = f" | MoM {short_mom:+.1f}% ({mom_label})"
-print(f"  SHORT:      {short_pct:.1f}% float | DTC {short_ratio:.1f}d{mom_str}")
+squeeze_str = " | ** SHORT SQUEEZE POTENTIAL **" if squeeze_flag else ""
+print(f"  SHORT:      {short_pct:.1f}% float | DTC {short_ratio:.1f}d{mom_str}{squeeze_str}")
 
 # Trend + weighted flow
 print(f"  TREND:      {increasing}/{total} ADDING | {decreasing}/{total} REDUCING | {trend} | Flow: {flow_label}")

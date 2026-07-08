@@ -9,10 +9,11 @@ import sys
 import math
 import time
 import concurrent.futures
+from pathlib import Path
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models import AnalystAction
 
 # Windows cp1255 fix
@@ -95,6 +96,20 @@ if total_analysts > 0:
     else:                    consensus = "HOLD"
 else:
     consensus = "NO DATA"
+
+# ── Consensus shift — are analysts getting MORE or LESS bullish? ──
+consensus_shift = "N/A"
+buy_delta = 0
+if rec_summary is not None and len(rec_summary) >= 2:
+    prior       = rec_summary.iloc[1]
+    prior_buys  = int(prior.get('strongBuy', 0)) + int(prior.get('buy', 0))
+    current_buys = strong_buy + buy
+    buy_delta    = current_buys - prior_buys
+    if buy_delta >= 3:      consensus_shift = "STRENGTHENING"
+    elif buy_delta >= 1:    consensus_shift = "IMPROVING"
+    elif buy_delta <= -3:   consensus_shift = "WEAKENING"
+    elif buy_delta <= -1:   consensus_shift = "SOFTENING"
+    else:                   consensus_shift = "STABLE"
 
 # ── Price targets ─────────────────────────────────────────────────
 pt_low = pt_high = pt_mean = pt_median = upside = upside_median = spread_ratio = 0.0
@@ -242,6 +257,26 @@ if eps_trend_df is not None and not eps_trend_df.empty:
     except Exception:
         pass
 
+# ── Conviction burst — 3+ bullish or bearish actions in 14 days ──
+burst_label = ""
+bull_14d = bear_14d = 0
+for a in recent_actions:
+    try:
+        days_ago = (datetime.now() - datetime.strptime(a.date, '%Y-%m-%d')).days
+    except ValueError:
+        continue
+    if days_ago > 14:
+        continue
+    if a.action in ('up', 'init') or a.pt_action == 'Raises':
+        bull_14d += 1
+    if a.action == 'down' or a.pt_action == 'Lowers':
+        bear_14d += 1
+
+if bull_14d >= 3:
+    burst_label = f"BULLISH BURST ({bull_14d} actions in 14d)"
+elif bear_14d >= 3:
+    burst_label = f"BEARISH BURST ({bear_14d} actions in 14d)"
+
 
 # ══════════════════════════════════════════════════════════════════
 #  VERBOSE OUTPUT (--verbose only)
@@ -338,12 +373,21 @@ if divergence and "FALLING" in divergence:
 elif divergence and "RISING" in divergence:
     score += 4
 
-# 10. NEW: EPS estimate revisions — the most predictive signal
-# Stocks follow estimates. Analysts raising next-quarter EPS = demand building.
+# 10. EPS estimate revisions — the most predictive signal
 if rev_direction == "RISING":        score += 8
 elif rev_direction == "TICKING UP":  score += 4
 elif rev_direction == "FALLING":     score -= 8
 elif rev_direction == "TICKING DOWN": score -= 4
+
+# 11. Consensus shift — analyst flow direction
+if consensus_shift == "STRENGTHENING":  score += 6
+elif consensus_shift == "IMPROVING":    score += 3
+elif consensus_shift == "WEAKENING":    score -= 6
+elif consensus_shift == "SOFTENING":    score -= 3
+
+# 12. Conviction burst — coordinated cluster in 14 days
+if bull_14d >= 3:   score += 6
+elif bear_14d >= 3: score -= 6
 
 score      = max(0, min(100, round(score)))
 signal     = "BULLISH" if score >= 70 else ("NEUTRAL" if score >= 45 else "BEARISH")
@@ -359,10 +403,11 @@ print(f"\n{sep}")
 print(f"  ANALYST ANALYSIS: ${TICKER}")
 print(f"{sep}")
 
-# Consensus
+# Consensus + shift
 buy_total  = strong_buy + buy
 sell_total = sell + strong_sell
-print(f"  CONSENSUS:  {buy_total} Buy ({strong_buy} Strong) | {hold} Hold | {sell_total} Sell | {consensus} ({buy_ratio*100:.0f}%)")
+shift_str  = f" | Shift: {consensus_shift} ({buy_delta:+d})" if consensus_shift != "N/A" else ""
+print(f"  CONSENSUS:  {buy_total} Buy ({strong_buy} Strong) | {hold} Hold | {sell_total} Sell | {consensus} ({buy_ratio*100:.0f}%){shift_str}")
 
 # Targets
 if pt_mean > 0:
@@ -394,6 +439,10 @@ if tier1_show:
             t1_parts.append(f"{name}: {a.to_grade} PT ${a.current_pt:.0f}")
     if t1_parts:
         print(f"  TIER 1:     {' | '.join(t1_parts)}")
+
+# Conviction burst
+if burst_label:
+    print(f"  BURST:      [!] {burst_label}")
 
 # Divergence
 if divergence:
