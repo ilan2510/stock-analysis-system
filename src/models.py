@@ -88,6 +88,16 @@ class DerivedMetrics:
 
 
 @dataclass
+class SectorBenchmark:
+    fwd_pe: float | None = None
+    peg: float | None = None
+    ev_ebitda: float | None = None
+    op_margin: float | None = None
+    roic: float | None = None
+    roe: float | None = None
+
+
+@dataclass
 class ScoringResult:
     score: int
     details: list[str]

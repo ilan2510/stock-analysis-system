@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models import (
     Fundamentals, BalanceSheet, CashFlow, IncomeStatement, DerivedMetrics,
     ScoringResult, EarningsRecord, NewsItem, InsiderTransaction, Catalyst,
-    QuarterlyRevenue, MoatAnalysis, ScenarioAnalysis,
+    QuarterlyRevenue, MoatAnalysis, ScenarioAnalysis, SectorBenchmark,
 )
 
 # Windows cp1255 fix — force UTF-8 output so em-dashes and arrows print correctly
@@ -31,14 +31,14 @@ NEWS_DAYS_BACK = 60
 # ── Sector Benchmarks (Damodaran, January 2026) ───────────────────────────────
 # Every metric is judged vs its sector median — not generic thresholds
 SECTOR_BENCHMARKS = {
-    'healthcare': {'fwd_pe': 42.33, 'peg': 2.74, 'ev_ebitda': 20,   'op_margin': 15.08, 'roic': 22.27, 'roe': 11.26},
-    'software':   {'fwd_pe': 34.13, 'peg': 1.65, 'ev_ebitda': 24,   'op_margin': 32.62, 'roic': 50.17, 'roe': 29.62},
-    'semi':       {'fwd_pe': 37.29, 'peg': 2.13, 'ev_ebitda': 35,   'op_margin': 34.66, 'roic': 41.83, 'roe': 31.36},
-    'retail':     {'fwd_pe': 23.97, 'peg': 2.86, 'ev_ebitda': 17,   'op_margin':  5.87, 'roic': 20.60, 'roe': 26.05},
-    'bank':       {'fwd_pe': 12.02, 'peg': 0.97, 'ev_ebitda': None, 'op_margin':  None, 'roic':  None, 'roe': 11.31},
-    'energy':     {'fwd_pe': 16.14, 'peg': 2.59, 'ev_ebitda':  5.5, 'op_margin': 24.03, 'roic': 13.79, 'roe': 12.21},
-    'utility':    {'fwd_pe': 18.13, 'peg': 2.96, 'ev_ebitda': 14,   'op_margin': 20.24, 'roic':  5.99, 'roe': 10.42},
-    'market':     {'fwd_pe': 27.66, 'peg': 1.90, 'ev_ebitda': 17,   'op_margin': 11.88, 'roic':  9.76, 'roe': 17.21},
+    'healthcare': SectorBenchmark(fwd_pe=42.33, peg=2.74, ev_ebitda=20,   op_margin=15.08, roic=22.27, roe=11.26),
+    'software':   SectorBenchmark(fwd_pe=34.13, peg=1.65, ev_ebitda=24,   op_margin=32.62, roic=50.17, roe=29.62),
+    'semi':       SectorBenchmark(fwd_pe=37.29, peg=2.13, ev_ebitda=35,   op_margin=34.66, roic=41.83, roe=31.36),
+    'retail':     SectorBenchmark(fwd_pe=23.97, peg=2.86, ev_ebitda=17,   op_margin=5.87,  roic=20.60, roe=26.05),
+    'bank':       SectorBenchmark(fwd_pe=12.02, peg=0.97, ev_ebitda=None, op_margin=None,  roic=None,  roe=11.31),
+    'energy':     SectorBenchmark(fwd_pe=16.14, peg=2.59, ev_ebitda=5.5,  op_margin=24.03, roic=13.79, roe=12.21),
+    'utility':    SectorBenchmark(fwd_pe=18.13, peg=2.96, ev_ebitda=14,   op_margin=20.24, roic=5.99,  roe=10.42),
+    'market':     SectorBenchmark(fwd_pe=27.66, peg=1.90, ev_ebitda=17,   op_margin=11.88, roic=9.76,  roe=17.21),
 }
 
 # ── yfinance sector -> benchmark key ──────────────────────────────────────────
@@ -626,11 +626,16 @@ def fmt(val, suffix: str = '', prefix: str = '', decimals: int = 2, na: str = 'N
     return f"{prefix}{val:,.{decimals}f}{suffix}"
 
 
+def bval(val, na: str = 'N/A'):
+    """Show a SectorBenchmark field, or N/A if that sector has no data for it."""
+    return val if val is not None else na
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  4-PILLAR SCORING ENGINE (auto-scores — AI just reads the result)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def score_quality(fundamentals: Fundamentals, derived: DerivedMetrics, bench: dict) -> ScoringResult:
+def score_quality(fundamentals: Fundamentals, derived: DerivedMetrics, bench: SectorBenchmark) -> ScoringResult:
     """Quality pillar (35%) — durability, margins, balance sheet."""
     score = 50
     details = []
@@ -638,7 +643,7 @@ def score_quality(fundamentals: Fundamentals, derived: DerivedMetrics, bench: di
     roic = fundamentals.roic
     if roic is None:
         roic = derived.roic_computed
-    b_roic = bench.get('roic')
+    b_roic = bench.roic
     if roic is not None and b_roic is not None:
         if roic > b_roic * 1.2:
             score += 12; details.append(f"ROIC {roic:.1f}% >> sector {b_roic:.1f}% [+12]")
@@ -673,7 +678,7 @@ def score_quality(fundamentals: Fundamentals, derived: DerivedMetrics, bench: di
             score -= 12; details.append(f"FCF Conversion {fconv:.2f} — ACCRUAL RISK [-12]")
 
     gm   = fundamentals.gross_margin
-    b_om = bench.get('op_margin')
+    b_om = bench.op_margin
     if gm is not None and b_om is not None:
         if gm > b_om * 1.2:
             score += 5; details.append(f"Gross Margin {gm:.1f}% > sector op margin {b_om:.1f}% [+5]")
@@ -722,15 +727,16 @@ def score_quality(fundamentals: Fundamentals, derived: DerivedMetrics, bench: di
 def score_value(
     fundamentals: Fundamentals,
     derived: DerivedMetrics,
-    stock_info: dict,
-    bench: dict,
+    forward_pe: float | None,
+    market_cap: float | None,
+    bench: SectorBenchmark,
 ) -> ScoringResult:
     """Value pillar (30%) — what you pay vs what you get."""
     score = 50
     details = []
 
     peg   = derived.peg
-    b_peg = bench.get('peg')
+    b_peg = bench.peg
     if peg is not None and peg > 0 and b_peg is not None:
         if peg < b_peg * 0.6:
             score += 15; details.append(f"PEG {peg:.2f} << sector {b_peg:.2f} — undervalued [+15]")
@@ -745,10 +751,9 @@ def score_value(
     elif peg is not None and peg <= 0:
         score -= 5; details.append(f"PEG negative — growth concern [-5]")
 
-    fwd_pe   = stock_info.get('forwardPE') if stock_info else None
-    pe       = fwd_pe if fwd_pe else fundamentals.pe_ttm
-    b_pe     = bench.get('fwd_pe')
-    pe_label = "Fwd P/E" if fwd_pe else "P/E TTM"
+    pe       = forward_pe if forward_pe else fundamentals.pe_ttm
+    b_pe     = bench.fwd_pe
+    pe_label = "Fwd P/E" if forward_pe else "P/E TTM"
     if pe is not None and pe > 0 and b_pe is not None:
         if pe < b_pe * 0.7:
             score += 10; details.append(f"{pe_label} {pe:.1f} << sector {b_pe:.1f} — cheap [+10]")
@@ -760,10 +765,7 @@ def score_value(
             score -= 8; details.append(f"{pe_label} {pe:.1f} > sector {b_pe:.1f} — premium [-8]")
 
     fcf  = derived.fcf
-    mcap = stock_info.get('marketCap') if stock_info else None
-    if not mcap:
-        mcap_m = fundamentals.market_cap
-        mcap = mcap_m * 1_000_000 if mcap_m else None
+    mcap = market_cap
     if fcf and mcap and mcap > 0:
         fy = (fcf / mcap) * 100
         if fy > 8:
@@ -778,7 +780,7 @@ def score_value(
             score -= 5; details.append(f"FCF Yield {fy:.1f}% — negative [-5]")
 
     ev_ebitda = derived.ev_ebitda
-    b_ev      = bench.get('ev_ebitda')
+    b_ev      = bench.ev_ebitda
     if ev_ebitda is not None and b_ev is not None:
         if ev_ebitda < b_ev * 0.6:
             score += 10; details.append(f"EV/EBITDA {ev_ebitda:.1f}x << sector {b_ev:.1f}x — deeply cheap [+10]")
@@ -882,7 +884,7 @@ def score_growth(
 def score_sentiment(
     insiders: list[InsiderTransaction],
     earnings: list[EarningsRecord],
-    stock_info: dict,
+    short_pct_float: float | None,
     quarterly_rev: QuarterlyRevenue | None = None,
 ) -> ScoringResult:
     """Sentiment pillar (10%) — what smart money and market are doing."""
@@ -906,13 +908,11 @@ def score_sentiment(
         score -= 3; details.append(f"Net insider selling ({buys}B/{sells}S) [-3]")
 
     short_pct = 0
-    if stock_info:
-        si = stock_info.get('shortPercentOfFloat')
-        if si is not None:
-            try:
-                short_pct = float(si) * 100
-            except (TypeError, ValueError):
-                short_pct = 0
+    if short_pct_float is not None:
+        try:
+            short_pct = float(short_pct_float) * 100
+        except (TypeError, ValueError):
+            short_pct = 0
     if short_pct > 0.1:
         if short_pct > 30:
             score -= 12; details.append(f"Short Interest {short_pct:.1f}% — extreme [-12]")
@@ -979,7 +979,7 @@ def check_red_flags(
     fundamentals: Fundamentals,
     derived: DerivedMetrics,
     insiders: list[InsiderTransaction],
-    stock_info: dict,
+    short_pct_float: float | None,
 ) -> list[str]:
     """Auto-check all red flags. Returns list of triggered flags."""
     flags = []
@@ -1014,82 +1014,16 @@ def check_red_flags(
             flags.append("OCF < Net Income — accrual quality risk")
             break
 
-    if stock_info:
-        si = stock_info.get('shortPercentOfFloat')
-        if si is not None:
-            try:
-                sp = float(si) * 100
-                if sp > 20:
-                    flags.append(f"Short interest {sp:.1f}% — heavy short pressure")
-            except (TypeError, ValueError):
-                pass
+    if short_pct_float is not None:
+        try:
+            sp = float(short_pct_float) * 100
+            if sp > 20:
+                flags.append(f"Short interest {sp:.1f}% — heavy short pressure")
+        except (TypeError, ValueError):
+            pass
 
     return flags
 
-
-def generate_highlights(
-    q: int, v: int, g: int, s: int,
-    total: int,
-    red_flags: list[str],
-    fundamentals: Fundamentals,
-    derived: DerivedMetrics,
-    bench_key: str,
-    insiders: list[InsiderTransaction],
-    earnings: list[EarningsRecord],
-) -> list[str]:
-    """Auto-generate key highlights from scoring results."""
-    highlights = []
-    bench = SECTOR_BENCHMARKS.get(bench_key, {})
-
-    pillars = [('Quality', q), ('Value', v), ('Growth', g), ('Sentiment', s)]
-    best  = max(pillars, key=lambda x: x[1])
-    worst = min(pillars, key=lambda x: x[1])
-    if best[1] >= 70:
-        highlights.append(f"  * {best[0]} score {best[1]}/100 -- POSITIVE (strongest pillar)")
-    if worst[1] < 40:
-        highlights.append(f"  * {worst[0]} score {worst[1]}/100 -- NEGATIVE (weakest pillar)")
-
-    peg   = derived.peg
-    b_peg = bench.get('peg')
-    if peg and b_peg and peg > 0 and peg < b_peg * 0.7:
-        highlights.append(f"  * PEG {peg:.2f} vs sector {b_peg:.2f} -- POSITIVE (value opportunity)")
-    elif peg and b_peg and peg > b_peg * 1.5:
-        highlights.append(f"  * PEG {peg:.2f} vs sector {b_peg:.2f} -- NEGATIVE (overvalued vs growth)")
-
-    roic = fundamentals.roic
-    if roic and roic > 20:
-        highlights.append(f"  * ROIC {roic:.1f}% -- POSITIVE (moat signal, value creation)")
-
-    fconv = derived.fcf_conversion
-    if fconv is not None and fconv >= 1.2:
-        highlights.append(f"  * FCF Conversion {fconv:.2f} -- POSITIVE (high quality earnings)")
-    elif fconv is not None and fconv < 0.8:
-        highlights.append(f"  * FCF Conversion {fconv:.2f} -- NEGATIVE (earnings quality concern)")
-
-    if earnings:
-        beats = sum(1 for e in earnings if e.beat)
-        if beats == len(earnings) and len(earnings) >= 3:
-            highlights.append(f"  * Earnings {beats}/{len(earnings)} beats -- POSITIVE (perfect streak)")
-        elif beats == 0 and len(earnings) >= 3:
-            highlights.append(f"  * Earnings 0/{len(earnings)} beats -- NEGATIVE (consistent misses)")
-
-    buys_count  = sum(1 for t in insiders if t.action == 'BUY')
-    sells_count = sum(1 for t in insiders if t.action == 'SELL')
-    if buys_count >= 3:
-        highlights.append(f"  * {buys_count} insider buys (cluster) -- POSITIVE (high conviction)")
-    elif sells_count >= 4:
-        highlights.append(f"  * {sells_count} insider sells -- NEGATIVE (broad selling)")
-
-    nd = derived.net_debt_ebitda
-    if nd is not None and nd < 0:
-        highlights.append(f"  * Net cash position -- POSITIVE (fortress balance sheet)")
-    elif nd is not None and nd > 5:
-        highlights.append(f"  * Net Debt/EBITDA {nd:.1f} -- NEGATIVE (high leverage)")
-
-    for flag in red_flags[:2]:
-        highlights.append(f"  * RED FLAG: {flag}")
-
-    return highlights
 
 
 def classify_moat(fundamentals: Fundamentals, derived: DerivedMetrics, bench_key: str) -> MoatAnalysis:
@@ -1443,9 +1377,9 @@ if __name__ == "__main__":
 
     # ── 4-pillar scoring ──────────────────────────────────────────────────
     q = score_quality(fundamentals, derived, bench)
-    v = score_value(fundamentals, derived, stock_info, bench)
+    v = score_value(fundamentals, derived, stock_info.get('forwardPE'), mcap, bench)
     g = score_growth(fundamentals, derived, bench_key)
-    s = score_sentiment(insiders, earnings, stock_info, quarterly_rev)
+    s = score_sentiment(insiders, earnings, stock_info.get('shortPercentOfFloat'), quarterly_rev)
 
     # ── verbose: pillar detail ─────────────────────────────────────────────
     if VERBOSE:
@@ -1463,7 +1397,7 @@ if __name__ == "__main__":
                 print(f"  {fundamentals.revenue_growth_yoy or 0:.1f}% Rev + {derived.fcf_margin or 0:.1f}% FCF = {r40:.0f} — {r40g}")
 
     # ── red flags ─────────────────────────────────────────────────────────
-    red_flags = check_red_flags(fundamentals, derived, insiders, stock_info)
+    red_flags = check_red_flags(fundamentals, derived, insiders, stock_info.get('shortPercentOfFloat'))
 
     # ── override rules ────────────────────────────────────────────────────
     q_final = q.score
@@ -1486,7 +1420,7 @@ if __name__ == "__main__":
         total = min(total, 35); forced_bearish = True
 
     peg_val      = derived.peg
-    b_peg        = bench.get('peg')
+    b_peg        = bench.peg
     p_score      = derived.piotroski_score
     p_max        = derived.piotroski_max
     insider_buys = sum(1 for t in insiders if t.action == 'BUY')
@@ -1536,10 +1470,10 @@ if __name__ == "__main__":
     ev_eb  = derived.ev_ebitda
     parts  = []
     if pe:     parts.append(f"P/E {pe:.1f}")
-    if fwd_pe: parts.append(f"Fwd P/E {fwd_pe:.1f} (sector {bench.get('fwd_pe','N/A')})")
-    if peg:    parts.append(f"PEG {peg:.2f} (sector {bench.get('peg','N/A')})")
+    if fwd_pe: parts.append(f"Fwd P/E {fwd_pe:.1f} (sector {bval(bench.fwd_pe)})")
+    if peg:    parts.append(f"PEG {peg:.2f} (sector {bval(bench.peg)})")
     if pb:     parts.append(f"P/B {pb:.1f}")
-    if ev_eb:  parts.append(f"EV/EBITDA {ev_eb:.1f}x (sector {bench.get('ev_ebitda','N/A')}x)")
+    if ev_eb:  parts.append(f"EV/EBITDA {ev_eb:.1f}x (sector {bval(bench.ev_ebitda)}x)")
     if mcap:   parts.append(f"MCap ${mcap/1e9:.1f}B")
     print(f"  VALUATION: {' | '.join(parts)}")
 
@@ -1557,7 +1491,7 @@ if __name__ == "__main__":
     p_sc     = derived.piotroski_score
     p_mx     = derived.piotroski_max
     parts    = []
-    if roic_val: parts.append(f"ROIC {roic_src}{roic_val:.1f}% (sector {bench.get('roic','N/A')}%)")
+    if roic_val: parts.append(f"ROIC {roic_src}{roic_val:.1f}% (sector {bval(bench.roic)}%)")
     if gm:
         gm_s = f"GM {gm:.1f}%"
         if gm_trend is not None: gm_s += f" ({gm_trend:+.1f}pp YoY)"
