@@ -8,12 +8,15 @@ import sys
 import json
 import math
 import time
+import logging
 import concurrent.futures
 from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models import HolderRecord
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 # Windows cp1255 fix
 if hasattr(sys.stdout, 'reconfigure'):
@@ -24,7 +27,7 @@ try:
     YF_AVAILABLE = True
 except ImportError:
     YF_AVAILABLE = False
-    print("WARNING: yfinance not installed.")
+    logging.error("yfinance not installed.")
     sys.exit(1)
 
 _args   = [a for a in sys.argv[1:] if not a.startswith('--')]

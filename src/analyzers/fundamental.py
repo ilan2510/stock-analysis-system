@@ -4,6 +4,7 @@ import json
 import sys
 import math
 import time
+import logging
 import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -14,6 +15,8 @@ from models import (
     QuarterlyRevenue, MoatAnalysis, ScenarioAnalysis, SectorBenchmark,
 )
 
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
 # Windows cp1255 fix — force UTF-8 output so em-dashes and arrows print correctly
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -23,7 +26,7 @@ try:
     YF_AVAILABLE = True
 except ImportError:
     YF_AVAILABLE = False
-    print("WARNING: yfinance not installed. Balance sheet / cash flow / reported EPS will use Finnhub fallback.")
+    logging.warning("yfinance not installed. Balance sheet / cash flow / reported EPS will use Finnhub fallback.")
 
 API_KEY = 'd86mf5hr01qgiu4625sgd86mf5hr01qgiu4625t0'
 NEWS_DAYS_BACK = 60
@@ -72,7 +75,7 @@ def fetch(url: str) -> dict | None:
         req = urllib.request.urlopen(url, timeout=10)
         return json.loads(req.read())
     except Exception as e:
-        print(f"Error fetching {url}: {e}")
+        logging.error(f"Error fetching {url}: {e}")
         return None
 
 
@@ -174,7 +177,7 @@ def get_balance_sheet(ticker: str) -> BalanceSheet:
                     source='yfinance',
                 )
         except Exception as e:
-            print(f"yfinance balance sheet error: {e} — falling back to Finnhub")
+            logging.warning(f"yfinance balance sheet error: {e} — falling back to Finnhub")
 
     # Finnhub fallback
     url  = f'https://finnhub.io/api/v1/stock/financials?symbol={ticker}&statement=bs&freq=annual&token={API_KEY}'
@@ -230,7 +233,7 @@ def get_cash_flow(ticker: str) -> CashFlow:
 
                 return CashFlow(ocf=ocf, capex=capex, fcf=fcf, ocf_prior=ocf_prior, source='yfinance')
         except Exception as e:
-            print(f"yfinance cash flow error: {e} — falling back to Finnhub")
+            logging.warning(f"yfinance cash flow error: {e} — falling back to Finnhub")
 
     # Finnhub fallback
     url  = f'https://finnhub.io/api/v1/stock/financials?symbol={ticker}&statement=cf&freq=annual&token={API_KEY}'
@@ -280,7 +283,7 @@ def get_income_stmt(ticker: str) -> IncomeStatement:
                     source='yfinance',
                 )
         except Exception as e:
-            print(f"yfinance income stmt error: {e} — falling back to Finnhub")
+            logging.warning(f"yfinance income stmt error: {e} — falling back to Finnhub")
 
     # Finnhub fallback
     url  = f'https://finnhub.io/api/v1/stock/financials?symbol={ticker}&statement=ic&freq=annual&token={API_KEY}'
@@ -543,7 +546,7 @@ def get_earnings(ticker: str) -> list[EarningsRecord]:
                     ))
                 return results
         except Exception as e:
-            print(f"yfinance earnings error: {e} — falling back to Finnhub")
+            logging.warning(f"yfinance earnings error: {e} — falling back to Finnhub")
 
     # Finnhub fallback (normalized EPS — may diverge from reported)
     url  = f'https://finnhub.io/api/v1/stock/earnings?symbol={ticker}&limit=4&token={API_KEY}'

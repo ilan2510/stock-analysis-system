@@ -7,12 +7,14 @@ Blended returns: 1W 20% / 1M 40% / 3M monthly-normalized 40%
 Architecture: CODE fetches + analyzes -> AI summarizes
 """
 from __future__ import annotations
-import sys, json, math, time, statistics
+import sys, json, math, time, statistics, logging
 from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models import SectorData
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -20,7 +22,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 try:
     import yfinance as yf
 except ImportError:
-    print("WARNING: yfinance not installed."); sys.exit(1)
+    logging.error("yfinance not installed.")
+    sys.exit(1)
 
 _args   = [a for a in sys.argv[1:] if not a.startswith('--')]
 TICKER  = _args[0].upper().replace('$', '') if _args else 'NFLX'
