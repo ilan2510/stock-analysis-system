@@ -322,9 +322,10 @@ if VERBOSE:
 # ══════════════════════════════════════════════════════════════════
 score = 50.0
 
-# 1. Consensus strength (-20 to +20)
+# 1. Consensus strength (-10 to +10) — raw ratings are lagging/crowd-following,
+# so this counts for less than revisions/shift below, which lead price action.
 if total_analysts > 0:
-    score += (buy_ratio - 0.5) * 40
+    score += (buy_ratio - 0.5) * 20
 
 # 2. Upside to mean target (-10 to +15)
 if upside > 30:      score += 15
@@ -374,17 +375,17 @@ if divergence and "FALLING" in divergence:
 elif divergence and "RISING" in divergence:
     score += 4
 
-# 10. EPS estimate revisions — the most predictive signal
-if rev_direction == "RISING":        score += 8
-elif rev_direction == "TICKING UP":  score += 4
-elif rev_direction == "FALLING":     score -= 8
-elif rev_direction == "TICKING DOWN": score -= 4
+# 10. EPS estimate revisions — the most predictive signal, weighted up
+if rev_direction == "RISING":        score += 14
+elif rev_direction == "TICKING UP":  score += 7
+elif rev_direction == "FALLING":     score -= 14
+elif rev_direction == "TICKING DOWN": score -= 7
 
-# 11. Consensus shift — analyst flow direction
-if consensus_shift == "STRENGTHENING":  score += 6
-elif consensus_shift == "IMPROVING":    score += 3
-elif consensus_shift == "WEAKENING":    score -= 6
-elif consensus_shift == "SOFTENING":    score -= 3
+# 11. Consensus shift — analyst flow direction (leading, not lagging), weighted up
+if consensus_shift == "STRENGTHENING":  score += 10
+elif consensus_shift == "IMPROVING":    score += 5
+elif consensus_shift == "WEAKENING":    score -= 10
+elif consensus_shift == "SOFTENING":    score -= 5
 
 # 12. Conviction burst — coordinated cluster in 14 days
 if bull_14d >= 3:   score += 6

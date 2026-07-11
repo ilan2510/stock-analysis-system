@@ -19,6 +19,10 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent))
 from models import AgentResult
 
+import warnings
+warnings.filterwarnings('ignore')
+import yfinance as yf
+
 # Windows cp1255 fix
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -49,6 +53,46 @@ WEIGHT_PROFILES = {
     'energy':      {'Fundamentals': 0.45, 'Institutional': 0.20, 'Analyst': 0.20, 'Trend': 0.15},
 }
 DEFAULT_WEIGHTS = {'Fundamentals': 0.45, 'Institutional': 0.20, 'Analyst': 0.20, 'Trend': 0.15}
+
+
+# ── Macro regime gate — VIX + SPY trend, checked before any single stock ──
+# Iron rule: macro first. A great stock score means less in a fear tape.
+def fetch_macro() -> dict:
+    macro = {'vix': None, 'spy_trend': 'UNKNOWN', 'regime': 'NEUTRAL', 'adj': 0}
+
+    try:
+        vix_hist = yf.Ticker('^VIX').history(period='5d')
+        if not vix_hist.empty:
+            macro['vix'] = float(vix_hist['Close'].iloc[-1])
+    except Exception:
+        pass
+
+    try:
+        spy_hist = yf.Ticker('SPY').history(period='250d')
+        if len(spy_hist) >= 200:
+            price  = float(spy_hist['Close'].iloc[-1])
+            sma50  = float(spy_hist['Close'].rolling(50).mean().iloc[-1])
+            sma200 = float(spy_hist['Close'].rolling(200).mean().iloc[-1])
+            if price > sma50 > sma200:
+                macro['spy_trend'] = 'UPTREND'
+            elif price < sma50 < sma200:
+                macro['spy_trend'] = 'DOWNTREND'
+            else:
+                macro['spy_trend'] = 'MIXED'
+    except Exception:
+        pass
+
+    vix, trend = macro['vix'], macro['spy_trend']
+    if trend == 'DOWNTREND' or (vix is not None and vix >= 25):
+        macro['regime'], macro['adj'] = 'RISK-OFF', -8
+    elif vix is not None and vix >= 20:
+        macro['regime'], macro['adj'] = 'CAUTION', -3
+    elif trend == 'UPTREND' and vix is not None and vix < 16:
+        macro['regime'], macro['adj'] = 'RISK-ON', 5
+    else:
+        macro['regime'], macro['adj'] = 'NEUTRAL', 0
+
+    return macro
 
 
 def load_history() -> dict:
@@ -298,6 +342,15 @@ for run in reversed(prev_runs):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  MACRO FIRST — VIX + SPY trend, before we even look at the stock
+# ══════════════════════════════════════════════════════════════════
+macro = fetch_macro()
+vix_str = f"{macro['vix']:.1f}" if macro['vix'] is not None else "N/A"
+print(f"MACRO:  VIX {vix_str} | SPY {macro['spy_trend']} -> {macro['regime']} "
+      f"(adj {macro['adj']:+d})\n")
+
+
+# ══════════════════════════════════════════════════════════════════
 #  RUN ALL AGENTS IN PARALLEL
 # ══════════════════════════════════════════════════════════════════
 _t0 = time.time()
@@ -344,9 +397,12 @@ failed = [r for r in results if r.score is None]
 if scored:
     total_weight   = sum(weight_profile.get(r.name, 0.20) for r in scored)
     weighted_score = sum(r.score * weight_profile.get(r.name, 0.20) for r in scored) / total_weight
-    final_score    = round(weighted_score)
+    raw_score      = round(weighted_score)
 else:
-    final_score = 0
+    raw_score = 0
+
+# Apply macro regime adjustment — a good stock still scores worse in a bad tape
+final_score = max(0, min(100, raw_score + macro['adj']))
 
 # Final signal
 if final_score >= 65:   final_signal = "BULLISH"
@@ -380,6 +436,20 @@ if scored:
         high = next(name for name, s, _ in score_list if s == max_s)
         low  = next(name for name, s, _ in score_list if s == min_s)
         conflicts.append(f"{high} ({max_s}) vs {low} ({min_s}) — {max_s - min_s}pt spread")
+
+# Earnings-date risk flag — don't get run over the day before a print
+earnings_flag = None
+earn_match = re.search(r'Next earnings\s+(\d{4}-\d{2}-\d{2})', fund_output, re.IGNORECASE)
+if earn_match:
+    try:
+        earn_date  = datetime.strptime(earn_match.group(1), '%Y-%m-%d')
+        days_until = (earn_date - datetime.now()).days
+        if 0 <= days_until <= 7:
+            earnings_flag = f"EARNINGS in {days_until}d ({earn_match.group(1)}) — HIGH RISK, don't open fresh size into it"
+        elif 8 <= days_until <= 14:
+            earnings_flag = f"EARNINGS in {days_until}d ({earn_match.group(1)}) — reduce size going in"
+    except ValueError:
+        pass
 
 # Score delta vs previous run
 score_delta = None
@@ -415,6 +485,12 @@ for r in results:
 
 if conflicts:
     print(f"\n  CONFLICT:    {conflicts[0]}")
+
+if macro['adj'] != 0:
+    print(f"\n  MACRO ADJ:   {raw_score} -> {final_score} ({macro['regime']}, {macro['adj']:+d})")
+
+if earnings_flag:
+    print(f"\n  EARNINGS:    [!] {earnings_flag}")
 
 if failed:
     print(f"\n  WARNING:     {len(failed)} agent(s) failed: {', '.join(r.name for r in failed)}")
