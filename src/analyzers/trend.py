@@ -7,7 +7,7 @@ Blended returns: 1W 20% / 1M 40% / 3M monthly-normalized 40%
 Architecture: CODE fetches + analyzes -> AI summarizes
 """
 from __future__ import annotations
-import sys, math, time, statistics
+import sys, json, math, time, statistics
 from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
@@ -387,3 +387,4 @@ print()
 print(f"{sep}")
 print(f"  SCORE:  {final}/100  {signal}  |  Macro {macro} · Theme {theme} · Stock {stock}  |  {conf}")
 print(f"{sep}")
+print(f"@@RESULT@@{json.dumps({'score': final, 'signal': signal, 'confidence': conf})}")

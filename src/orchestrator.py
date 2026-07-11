@@ -103,10 +103,19 @@ def run_agent(agent: dict, ticker: str, verbose: bool) -> AgentResult:
 
     score = None
     signal = 'UNKNOWN'
-    match = re.search(r'SCORE:\s+(\d+)/100\s+(\w+)', output)
-    if match:
-        score  = int(match.group(1))
-        signal = match.group(2)
+    marker = re.search(r'@@RESULT@@(\{.*\})', output)
+    if marker:
+        try:
+            parsed = json.loads(marker.group(1))
+            score  = int(parsed['score'])
+            signal = parsed['signal']
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            marker = None
+    if not marker:
+        match = re.search(r'SCORE:\s+(\d+)/100\s+(\w+)', output)
+        if match:
+            score  = int(match.group(1))
+            signal = match.group(2)
 
     return AgentResult(
         name=agent['name'], script=agent['script'],

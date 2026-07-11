@@ -156,8 +156,9 @@ def get_balance_sheet(ticker: str) -> BalanceSheet:
                 de_prior = None
                 if prior is not None:
                     td_pr = _yf_val(prior, 'Total Debt') or 0
-                    eq_pr = _yf_val(prior, 'Common Stock Equity', 'Stockholders Equity') or 1
-                    de_prior = round(td_pr / eq_pr, 3)
+                    eq_pr = _yf_val(prior, 'Common Stock Equity', 'Stockholders Equity')
+                    if eq_pr:
+                        de_prior = round(td_pr / eq_pr, 3)
 
                 return BalanceSheet(
                     long_term_debt=ltd,
@@ -191,7 +192,7 @@ def get_balance_sheet(ticker: str) -> BalanceSheet:
     cash   = get_field(latest, 'cash', 'cashAndCashEquivalents', default=0) or 0
     total_debt = ltd + std + leases
     ltd_pr = get_field(prior, 'longTermDebt', default=0) or 0
-    eq_pr  = get_field(prior, 'totalStockholderEquity', default=1) or 1
+    eq_pr  = get_field(prior, 'totalStockholderEquity', default=0) or 0
     return BalanceSheet(
         long_term_debt=ltd,
         short_term_debt=std,
@@ -201,7 +202,7 @@ def get_balance_sheet(ticker: str) -> BalanceSheet:
         total_liabilities=liab,
         cash=cash,
         de_ratio_actual=round(total_debt / equity, 3) if equity else None,
-        de_prior=round(ltd_pr / eq_pr, 3),
+        de_prior=round(ltd_pr / eq_pr, 3) if eq_pr else None,
         source='finnhub',
     )
 
@@ -603,7 +604,8 @@ def get_insiders(ticker: str) -> list[InsiderTransaction]:
     if not data:
         return []
     transactions = []
-    for t in data.get('data', [])[:10]:
+    raw = sorted(data.get('data', []), key=lambda t: t.get('transactionDate') or '', reverse=True)
+    for t in raw[:10]:
         code   = t.get('transactionCode')
         action = 'BUY' if code == 'P' else 'SELL' if code == 'S' else 'OTHER'
         transactions.append(InsiderTransaction(
@@ -1655,3 +1657,4 @@ if __name__ == "__main__":
     forced_s = " [CAPPED — red flags]" if forced_bearish else ""
     print(f"  SCORE:  {total}/100  {signal}{forced_s}  |  EV: {scenarios.ev}/100  {scenarios.ev_sig}  |  Confidence: {confidence}")
     print(f"{sep}")
+    print(f"@@RESULT@@{json.dumps({'score': total, 'signal': signal, 'confidence': confidence})}")

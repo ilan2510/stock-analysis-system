@@ -6,6 +6,7 @@ Architecture: CODE fetches + analyzes -> AI just summarizes.
 from __future__ import annotations
 
 import sys
+import json
 import math
 import time
 import concurrent.futures
@@ -452,3 +453,4 @@ print()
 print(f"{sep}")
 print(f"  SCORE:  {score}/100  {signal}  |  Confidence: {confidence}")
 print(f"{sep}")
+print(f"@@RESULT@@{json.dumps({'score': score, 'signal': signal, 'confidence': confidence})}")
